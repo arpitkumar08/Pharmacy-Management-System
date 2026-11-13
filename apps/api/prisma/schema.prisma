@@ -1,0 +1,489 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  ORG_ADMIN
+  BRANCH_MANAGER
+  PHARMACIST
+  CASHIER
+  INVENTORY_CLERK
+  AUDITOR
+}
+
+enum BatchStatus {
+  ACTIVE
+  QUARANTINED
+  DEPLETED
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  ORDERED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+enum SaleStatus {
+  COMPLETED
+  PARTIALLY_RETURNED
+  RETURNED
+  VOIDED
+}
+
+enum MovementType {
+  OPENING
+  PURCHASE_RECEIPT
+  SALE
+  SALE_RETURN
+  ADJUSTMENT
+  EXPIRY_WRITE_OFF
+  TRANSFER_OUT
+  TRANSFER_IN
+}
+
+enum AdjustmentReasonCode {
+  DAMAGE
+  THEFT
+  COUNT_CORRECTION
+  EXPIRED_WRITE_OFF
+  OTHER
+}
+
+enum ReturnReasonCode {
+  DEFECTIVE
+  EXPIRED
+  WRONG_ITEM
+  PATIENT_CANCELLED
+  OTHER
+}
+
+enum ReturnDisposition {
+  RESTOCK
+  QUARANTINE
+  WRITE_OFF
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  UPI
+  OTHER
+}
+
+enum MedicineUnit {
+  TABLET
+  CAPSULE
+  STRIP
+  BOTTLE
+  INJECTION
+  TUBE
+  BOX
+  SYRUP
+}
+
+model Organization {
+  id               String            @id @default(uuid())
+  name             String
+  settings         Json              @default("{\"taxRate\": 0, \"nearExpiryDays\": 90, \"returnWindowDays\": 30, \"minShelfLifeDays\": 0}")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  branches         Branch[]
+  users            User[]
+  categories       Category[]
+  suppliers        Supplier[]
+  medicines        Medicine[]
+  batches          Batch[]
+  purchaseOrders   PurchaseOrder[]
+  customers        Customer[]
+  sales            Sale[]
+  saleReturns      SaleReturn[]
+  stockAdjustments StockAdjustment[]
+  stockMovements   StockMovement[]
+  auditLogs        AuditLog[]
+  idempotencyKeys  IdempotencyKey[]
+
+  @@map("organizations")
+}
+
+model Branch {
+  id               String                 @id @default(uuid())
+  organizationId   String                 @map("organization_id")
+  name             String
+  code             String
+  timezone         String                 @default("UTC")
+  createdAt        DateTime               @default(now()) @map("created_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
+  organization     Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userBranchRoles  UserBranchRole[]
+  batches          Batch[]
+  purchaseOrders   PurchaseOrder[]
+  sales            Sale[]
+  saleReturns      SaleReturn[]
+  stockAdjustments StockAdjustment[]
+  stockMovements   StockMovement[]
+  auditLogs        AuditLog[]
+  invoiceCounter   BranchInvoiceCounter?
+
+  @@unique([organizationId, code])
+  @@map("branches")
+}
+
+model User {
+  id                  String            @id @default(uuid())
+  organizationId      String            @map("organization_id")
+  email               String
+  passwordHash        String            @map("password_hash")
+  name                String
+  isActive            Boolean           @default(true) @map("is_active")
+  failedLoginCount    Int               @default(0) @map("failed_login_count")
+  lockedUntil         DateTime?         @map("locked_until")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
+  organization        Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchRoles         UserBranchRole[]
+  refreshTokens       RefreshToken[]
+  sales               Sale[]
+  adjustmentsCreated  StockAdjustment[]
+  auditLogs           AuditLog[]
+
+  @@unique([organizationId, email])
+  @@map("users")
+}
+
+model UserBranchRole {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  branchId  String   @map("branch_id")
+  role      UserRole
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, branchId, role])
+  @@index([userId])
+  @@index([branchId])
+  @@map("user_branch_roles")
+}
+
+model RefreshToken {
+  id         String    @id @default(uuid())
+  userId     String    @map("user_id")
+  familyId   String    @map("family_id")
+  tokenHash  String    @map("token_hash")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  replacedBy String?   @map("replaced_by")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+model Category {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  name           String
+  description    String?
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  medicines      Medicine[]
+
+  @@unique([organizationId, name])
+  @@map("categories")
+}
+
+model Supplier {
+  id             String          @id @default(uuid())
+  organizationId String          @map("organization_id")
+  name           String
+  contact        String?
+  isActive       Boolean         @default(true) @map("is_active")
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  purchaseOrders PurchaseOrder[]
+
+  @@map("suppliers")
+}
+
+model Medicine {
+  id                   String              @id @default(uuid())
+  organizationId       String              @map("organization_id")
+  sku                  String
+  name                 String
+  genericName          String?             @map("generic_name")
+  categoryId           String              @map("category_id")
+  unit                 MedicineUnit
+  taxRate              Decimal             @default(0.00) @map("tax_rate") @db.Decimal(5, 2)
+  requiresPrescription Boolean             @default(false) @map("requires_prescription")
+  reorderLevel         Int                 @default(10) @map("reorder_level")
+  isActive             Boolean             @default(true) @map("is_active")
+  organization         Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category             Category            @relation(fields: [categoryId], references: [id])
+  batches              Batch[]
+  poItems              PurchaseOrderItem[]
+  saleItems            SaleItem[]
+  stockMovements       StockMovement[]
+
+  @@unique([organizationId, sku])
+  @@index([organizationId, name])
+  @@map("medicines")
+}
+
+model Batch {
+  id               String               @id @default(uuid())
+  organizationId   String               @map("organization_id")
+  branchId         String               @map("branch_id")
+  medicineId       String               @map("medicine_id")
+  batchNumber      String               @map("batch_number")
+  expiryDate       DateTime             @map("expiry_date")
+  qtyOnHand        Int                  @default(0) @map("qty_on_hand")
+  purchasePrice    Decimal              @default(0.00) @map("purchase_price") @db.Decimal(12, 2)
+  salePrice        Decimal              @default(0.00) @map("sale_price") @db.Decimal(12, 2)
+  status           BatchStatus          @default(ACTIVE)
+  receivedAt       DateTime             @default(now()) @map("received_at")
+  organization     Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch           Branch               @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  medicine         Medicine             @relation(fields: [medicineId], references: [id])
+  allocations      SaleItemAllocation[]
+  stockAdjustments StockAdjustment[]
+  stockMovements   StockMovement[]
+
+  @@unique([branchId, medicineId, batchNumber])
+  @@index([branchId, medicineId, expiryDate])
+  @@index([branchId, expiryDate])
+  @@map("batches")
+}
+
+model PurchaseOrder {
+  id             String              @id @default(uuid())
+  organizationId String              @map("organization_id")
+  branchId       String              @map("branch_id")
+  supplierId     String              @map("supplier_id")
+  status         PurchaseOrderStatus @default(DRAFT)
+  version        Int                 @default(1)
+  subtotal       Decimal             @default(0.00) @db.Decimal(12, 2)
+  taxTotal       Decimal             @default(0.00) @map("tax_total") @db.Decimal(12, 2)
+  grandTotal     Decimal             @default(0.00) @map("grand_total") @db.Decimal(12, 2)
+  notes          String?
+  createdAt      DateTime            @default(now()) @map("created_at")
+  updatedAt      DateTime            @updatedAt @map("updated_at")
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch         Branch              @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  supplier       Supplier            @relation(fields: [supplierId], references: [id])
+  items          PurchaseOrderItem[]
+
+  @@index([branchId, status])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id            String        @id @default(uuid())
+  poId          String        @map("po_id")
+  medicineId    String        @map("medicine_id")
+  qtyOrdered    Int           @map("qty_ordered")
+  qtyReceived   Int           @default(0) @map("qty_received")
+  unitCost      Decimal       @default(0.00) @map("unit_cost") @db.Decimal(12, 2)
+  purchaseOrder PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  medicine      Medicine      @relation(fields: [medicineId], references: [id])
+
+  @@map("purchase_order_items")
+}
+
+model Customer {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  name           String
+  phone          String?
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sales          Sale[]
+
+  @@map("customers")
+}
+
+model BranchInvoiceCounter {
+  branchId String @id @map("branch_id")
+  lastNo   Int    @default(0) @map("last_no")
+  year     Int
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@map("branch_invoice_counters")
+}
+
+model Sale {
+  id             String        @id @default(uuid())
+  organizationId String        @map("organization_id")
+  branchId       String        @map("branch_id")
+  invoiceNumber  String        @map("invoice_number")
+  status         SaleStatus    @default(COMPLETED)
+  cashierId      String        @map("cashier_id")
+  customerId     String?       @map("customer_id")
+  subtotal       Decimal       @default(0.00) @db.Decimal(12, 2)
+  taxTotal       Decimal       @default(0.00) @map("tax_total") @db.Decimal(12, 2)
+  grandTotal     Decimal       @default(0.00) @map("grand_total") @db.Decimal(12, 2)
+  paymentMethod  PaymentMethod @default(CASH) @map("payment_method")
+  idempotencyKey String?       @map("idempotency_key")
+  notes          String?
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch         Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  cashier        User          @relation(fields: [cashierId], references: [id])
+  customer       Customer?     @relation(fields: [customerId], references: [id])
+  items          SaleItem[]
+  returns        SaleReturn[]
+
+  @@unique([branchId, invoiceNumber])
+  @@index([branchId, createdAt])
+  @@map("sales")
+}
+
+model SaleItem {
+  id          String               @id @default(uuid())
+  saleId      String               @map("sale_id")
+  medicineId  String               @map("medicine_id")
+  qty         Int
+  unitPrice   Decimal              @map("unit_price") @db.Decimal(12, 2)
+  taxRate     Decimal              @map("tax_rate") @db.Decimal(5, 2)
+  taxAmount   Decimal              @map("tax_amount") @db.Decimal(12, 2)
+  lineTotal   Decimal              @map("line_total") @db.Decimal(12, 2)
+  sale        Sale                 @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  medicine    Medicine             @relation(fields: [medicineId], references: [id])
+  allocations SaleItemAllocation[]
+
+  @@map("sale_items")
+}
+
+model SaleItemAllocation {
+  id          String           @id @default(uuid())
+  saleItemId  String           @map("sale_item_id")
+  batchId     String           @map("batch_id")
+  qty         Int
+  unitCost    Decimal          @map("unit_cost") @db.Decimal(12, 2)
+  saleItem    SaleItem         @relation(fields: [saleItemId], references: [id], onDelete: Cascade)
+  batch       Batch            @relation(fields: [batchId], references: [id])
+  returnItems SaleReturnItem[]
+
+  @@index([saleItemId])
+  @@index([batchId])
+  @@map("sale_item_allocations")
+}
+
+model SaleReturn {
+  id             String           @id @default(uuid())
+  organizationId String           @map("organization_id")
+  branchId       String           @map("branch_id")
+  saleId         String           @map("sale_id")
+  reasonCode     ReturnReasonCode @map("reason_code")
+  reasonNote     String           @map("reason_note")
+  refundTotal    Decimal          @default(0.00) @map("refund_total") @db.Decimal(12, 2)
+  createdBy      String           @map("created_by")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch         Branch           @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  sale           Sale             @relation(fields: [saleId], references: [id])
+  items          SaleReturnItem[]
+
+  @@index([branchId, createdAt])
+  @@map("sale_returns")
+}
+
+model SaleReturnItem {
+  id           String             @id @default(uuid())
+  returnId     String             @map("return_id")
+  allocationId String             @map("allocation_id")
+  qty          Int
+  disposition  ReturnDisposition
+  refundAmount Decimal            @default(0.00) @map("refund_amount") @db.Decimal(12, 2)
+  return       SaleReturn         @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  allocation   SaleItemAllocation @relation(fields: [allocationId], references: [id])
+
+  @@map("sale_return_items")
+}
+
+model StockAdjustment {
+  id             String               @id @default(uuid())
+  organizationId String               @map("organization_id")
+  branchId       String               @map("branch_id")
+  batchId        String               @map("batch_id")
+  qtyDelta       Int                  @map("qty_delta")
+  reasonCode     AdjustmentReasonCode @map("reason_code")
+  reasonNote     String               @map("reason_note")
+  createdBy      String               @map("created_by")
+  createdAt      DateTime             @default(now()) @map("created_at")
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch         Branch               @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  batch          Batch                @relation(fields: [batchId], references: [id])
+  creator        User                 @relation(fields: [createdBy], references: [id])
+
+  @@index([branchId, createdAt])
+  @@map("stock_adjustments")
+}
+
+model StockMovement {
+  id             BigInt       @id @default(autoincrement())
+  organizationId String       @map("organization_id")
+  branchId       String       @map("branch_id")
+  batchId        String       @map("batch_id")
+  medicineId     String       @map("medicine_id")
+  type           MovementType
+  qtyDelta       Int          @map("qty_delta")
+  balanceAfter   Int          @map("balance_after")
+  refType        String?      @map("ref_type")
+  refId          String?      @map("ref_id")
+  createdBy      String?      @map("created_by")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  batch          Batch        @relation(fields: [batchId], references: [id])
+  medicine       Medicine     @relation(fields: [medicineId], references: [id])
+
+  @@index([batchId, createdAt])
+  @@index([branchId, createdAt])
+  @@index([medicineId, createdAt])
+  @@map("stock_movements")
+}
+
+model AuditLog {
+  id             BigInt       @id @default(autoincrement())
+  organizationId String       @map("organization_id")
+  branchId       String?      @map("branch_id")
+  actorUserId    String?      @map("actor_user_id")
+  action         String
+  entityType     String       @map("entity_type")
+  entityId       String       @map("entity_id")
+  before         Json?
+  after          Json?
+  requestId      String?      @map("request_id")
+  ip             String?
+  createdAt      DateTime     @default(now()) @map("created_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  actor          User?        @relation(fields: [actorUserId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([branchId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+model IdempotencyKey {
+  organizationId String       @map("organization_id")
+  key            String
+  requestHash    String       @map("request_hash")
+  status         String       @default("IN_PROGRESS") // IN_PROGRESS, DONE
+  responseCode   Int?         @map("response_code")
+  responseBody   Json?        @map("response_body")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, key])
+  @@map("idempotency_keys")
+}
+

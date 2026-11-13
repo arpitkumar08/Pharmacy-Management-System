@@ -3,19 +3,43 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "eslint": "^10.14.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.6.0",
+    "prettier": "^3.9.10",
+    "typescript-eslint": "^8.72.1"
   },
   "peerDependencies": {
-    "typescript": "^7"
+    "typescript": "^5.7.3"
   },
   "scripts": {
     "infra:up": "docker compose -f infra/docker-compose.dev.yml up -d",
     "infra:down": "docker compose -f infra/docker-compose.dev.yml down",
+    "db:migrate": "bun --filter @pharmacy/api prisma:migrate:deploy",
+    "db:seed": "bun --filter @pharmacy/api prisma:seed",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "build": "bun run --filter @pharmacy/shared build"
+    "build": "bun run --filter @pharmacy/shared build",
+    "dev:web": "bun --filter @pharmacy/web dev",
+    "dev:api": "bun --filter @pharmacy/api dev",
+    "build:web": "bun --filter @pharmacy/web build",
+    "build:api": "bun run build && bun --filter @pharmacy/api build",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{js,ts,mjs}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
   }
 }
